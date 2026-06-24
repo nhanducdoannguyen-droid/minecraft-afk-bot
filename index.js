@@ -10,7 +10,7 @@ const CONFIG = {
   username: process.env.MC_USERNAME || 'BotTreoServer',
   version: process.env.MC_VERSION || '1.21.11', // Thiết lập phiên bản Minecraft cụ thể để tránh ping tự động dò tìm gây ETIMEDOUT
   auth: 'offline',
-  reconnectDelay: 30_000,
+  reconnectDelay: 10_000,
   antiAfkInterval: 8_000,
 };
 
