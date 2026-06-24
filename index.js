@@ -2,74 +2,68 @@ const mineflayer = require('mineflayer');
 const express = require('express');
 
 // ============================================================
-//  CẤU HÌNH BOT – thay đổi tại đây nếu cần
+//  CẤU HÌNH
 // ============================================================
 const CONFIG = {
   host: process.env.MC_HOST || 'nhancu1234.aternos.me',
   port: parseInt(process.env.MC_PORT, 10) || 44076,
   username: process.env.MC_USERNAME || 'BotTreoServer',
-  auth: 'offline',                                  // Aternos dùng offline mode
-  reconnectDelay: 30_000,                           // 30 giây giữa mỗi lần reconnect
-  antiAfkInterval: 8_000,                           // 8 giây chống AFK (Aternos kick sau 10 phút)
+  auth: 'offline',
+  reconnectDelay: 30_000,
+  antiAfkInterval: 8_000,
 };
 
-// ============================================================
-//  CẤU HÌNH NHÀ TÙ BEDROCK
-// ============================================================
 const PRISON = {
-  centerY: 310,       // Độ cao trung tâm nhà tù (gần max Y=319)
-  innerSize: 5,       // Kích thước bên trong 5x5x5 (đủ rộng di chuyển + nhảy)
+  centerY: 310,
+  innerSize: 5,
 };
 
 // ============================================================
-//  WEB SERVER – Render yêu cầu 1 HTTP endpoint để giữ service
+//  WEB SERVER
 // ============================================================
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 let botStatus = { online: false, lastLogin: null, lastError: null, position: null };
 
 app.get('/', (_req, res) => {
   res.json({
-    status: botStatus.online ? '🟢 Bot đang online' : '🔴 Bot đang offline',
+    status: botStatus.online ? '🟢 Online' : '🔴 Offline',
     server: `${CONFIG.host}:${CONFIG.port}`,
     username: CONFIG.username,
     edition: 'Java',
-    lastLogin: botStatus.lastLogin,
-    lastError: botStatus.lastError,
-    position: botStatus.position,
+    ...botStatus,
     uptime: process.uptime().toFixed(0) + 's',
   });
 });
-
 app.get('/health', (_req, res) => res.send('OK'));
-
-app.listen(PORT, () => {
-  console.log(`[WEB] Health-check server đang chạy tại port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`[WEB] Port ${PORT} ready`));
 
 // ============================================================
-//  TẠO & QUẢN LÝ BOT
+//  BOT
 // ============================================================
 let bot = null;
 let antiAfkTimer = null;
+let reconnectTimer = null;
 let isConnecting = false;
 let prisonBuilt = false;
 let prisonCenter = { x: 0, y: PRISON.centerY, z: 0 };
 
+function destroyBot() {
+  stopAntiAfk();
+  if (bot) {
+    try { bot.removeAllListeners(); } catch (_) {}
+    try { bot.end('cleanup'); } catch (_) {}
+    bot = null;
+  }
+}
+
 function createBot() {
   if (isConnecting) return;
   isConnecting = true;
+  prisonBuilt = false;
 
-  // Dọn sạch bot cũ nếu còn tồn tại
-  if (bot) {
-    try {
-      bot.removeAllListeners();
-      bot.end();
-    } catch (_) {}
-    bot = null;
-  }
-  stopAntiAfk();
+  // Dọn bot cũ
+  destroyBot();
 
   console.log(`[BOT] Đang kết nối đến ${CONFIG.host}:${CONFIG.port} (Java Edition)...`);
 
@@ -81,7 +75,7 @@ function createBot() {
       auth: CONFIG.auth,
       hideErrors: false,
       skipValidation: true,
-      checkTimeoutInterval: 60000,   // 60s timeout thay vì mặc định 10s
+      checkTimeoutInterval: 60_000,
     });
   } catch (err) {
     console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
@@ -91,168 +85,120 @@ function createBot() {
     return;
   }
 
-  // === Sự kiện: Đã login vào server ===
+  // --- Guard chống xử lý disconnect nhiều lần ---
+  let disconnected = false;
+  function onDisconnect(reason) {
+    if (disconnected) return;
+    disconnected = true;
+    console.log(`[BOT] 🔌 ${reason}`);
+    botStatus.online = false;
+    botStatus.lastError = reason;
+    isConnecting = false;
+    prisonBuilt = false;
+    destroyBot();
+    scheduleReconnect();
+  }
+
+  // Login thành công
   bot.on('login', () => {
-    console.log(`[BOT] ✅ Đã login vào server!`);
+    console.log('[BOT] ✅ Đã login!');
     botStatus.online = true;
     botStatus.lastLogin = new Date().toISOString();
     isConnecting = false;
   });
 
-  // === Sự kiện: Spawn – Chuyển Creative, TP lên cao, xây nhà tù ===
+  // Spawn vào thế giới
   bot.once('spawn', () => {
-    console.log('[BOT] ✅ Đã spawn vào thế giới!');
+    console.log('[BOT] ✅ Đã spawn!');
     if (!bot || !bot.entity) return;
-    const pos = bot.entity.position;
-    console.log(`[BOT] 📍 Vị trí spawn: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
-
-    // Delay nhẹ để server xử lý xong spawn
-    setTimeout(() => {
-      setupCreativePrison();
-    }, 3000);
+    const p = bot.entity.position;
+    console.log(`[BOT] 📍 Vị trí: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`);
+    setTimeout(() => setupCreativePrison(), 3000);
   });
 
-  // === Sự kiện: Nhận tin nhắn chat ===
+  // Chat
   bot.on('chat', (username, message) => {
     if (username === CONFIG.username) return;
     console.log(`[CHAT] <${username}> ${message}`);
   });
 
-  // === Guard chống gọi reconnect nhiều lần ===
-  let hasDisconnected = false;
-
-  function handleDisconnect(reason) {
-    if (hasDisconnected) return; // Đã xử lý rồi, bỏ qua
-    hasDisconnected = true;
-    console.log(`[BOT] 🔌 Ngắt kết nối: ${reason}`);
-    botStatus.online = false;
-    botStatus.lastError = reason;
-    prisonBuilt = false;
-    cleanup();
-    scheduleReconnect();
-  }
-
-  // === Sự kiện: Bị kick ===
+  // Disconnect events
   bot.on('kicked', (reason) => {
-    let reasonText = reason;
-    try { reasonText = JSON.parse(reason)?.text || reason; } catch (_) {}
-    handleDisconnect(`Kicked: ${reasonText}`);
+    let text = reason;
+    try { text = JSON.parse(reason)?.text || reason; } catch (_) {}
+    onDisconnect(`Kicked: ${text}`);
   });
 
-  // === Sự kiện: Lỗi ===
   bot.on('error', (err) => {
     console.log(`[BOT] ❌ Lỗi: ${err.message}`);
-    handleDisconnect(`Error: ${err.message}`);
+    onDisconnect(`Error: ${err.message}`);
   });
 
-  // === Sự kiện: Mất kết nối ===
   bot.on('end', (reason) => {
-    handleDisconnect(`Disconnected: ${reason || 'unknown'}`);
+    onDisconnect(`End: ${reason || 'unknown'}`);
   });
-}
-
-function cleanup() {
-  isConnecting = false;
-  stopAntiAfk();
-
-  // Đóng bot cũ đúng cách
-  if (bot) {
-    try {
-      bot.removeAllListeners();
-      bot.end();
-    } catch (_) {}
-    bot = null;
-  }
 }
 
 // ============================================================
-//  SETUP CREATIVE + NHÀ TÙ BEDROCK Ở ĐỘ CAO TỐI ĐA
+//  CREATIVE + NHÀ TÙ BEDROCK
 // ============================================================
 function setupCreativePrison() {
   if (!bot || prisonBuilt) return;
 
-  // Bước 1: Chuyển sang Creative mode
-  console.log('[SETUP] 🎮 Chuyển sang Creative mode...');
+  console.log('[SETUP] 🎮 /gamemode creative');
   bot.chat('/gamemode creative');
 
-  // Bước 2: Teleport lên cao
   setTimeout(() => {
-    if (!bot) return;
-    const pos = bot.entity.position;
-    const cx = Math.floor(pos.x);
-    const cz = Math.floor(pos.z);
+    if (!bot || !bot.entity) return;
+    const p = bot.entity.position;
+    const cx = Math.floor(p.x);
+    const cz = Math.floor(p.z);
     prisonCenter = { x: cx, y: PRISON.centerY, z: cz };
 
-    console.log(`[SETUP] 🚀 Teleport lên (${cx}, ${PRISON.centerY}, ${cz})...`);
+    console.log(`[SETUP] 🚀 TP lên Y=${PRISON.centerY}`);
     bot.chat(`/tp ${CONFIG.username} ${cx} ${PRISON.centerY} ${cz}`);
 
-    // Bước 3: Xây nhà tù bedrock
-    setTimeout(() => {
-      buildBedrockPrison(cx, PRISON.centerY, cz);
-    }, 2000);
+    setTimeout(() => buildPrison(cx, PRISON.centerY, cz), 2000);
   }, 2000);
 }
 
-function buildBedrockPrison(cx, cy, cz) {
+function buildPrison(cx, cy, cz) {
   if (!bot) return;
+  const h = Math.floor(PRISON.innerSize / 2);
+  const height = PRISON.innerSize;
 
-  const half = Math.floor(PRISON.innerSize / 2); // = 2
-  const height = PRISON.innerSize;                // = 5
+  // Fill bedrock đặc
+  const cmd1 = `/fill ${cx-h-1} ${cy-1} ${cz-h-1} ${cx+h+1} ${cy+height} ${cz+h+1} minecraft:bedrock`;
+  console.log(`[SETUP] 🧱 ${cmd1}`);
+  bot.chat(cmd1);
 
-  // Toạ độ nhà tù bên ngoài (tường bedrock)
-  const x1 = cx - half - 1;
-  const y1 = cy - 1;
-  const z1 = cz - half - 1;
-  const x2 = cx + half + 1;
-  const y2 = cy + height;
-  const z2 = cz + half + 1;
-
-  console.log(`[SETUP] 🧱 Xây nhà tù bedrock từ (${x1},${y1},${z1}) đến (${x2},${y2},${z2})...`);
-  console.log(`[SETUP] 📏 Kích thước bên trong: ${PRISON.innerSize}x${height}x${PRISON.innerSize}`);
-
-  // Fill toàn bộ khối bedrock (Java syntax)
-  bot.chat(`/fill ${x1} ${y1} ${z1} ${x2} ${y2} ${z2} minecraft:bedrock`);
-
-  // Đào rỗng bên trong
   setTimeout(() => {
     if (!bot) return;
-    const ix1 = cx - half;
-    const iy1 = cy;
-    const iz1 = cz - half;
-    const ix2 = cx + half;
-    const iy2 = cy + height - 1;
-    const iz2 = cz + half;
+    // Đào rỗng bên trong
+    const cmd2 = `/fill ${cx-h} ${cy} ${cz-h} ${cx+h} ${cy+height-1} ${cz+h} minecraft:air`;
+    console.log(`[SETUP] 💨 ${cmd2}`);
+    bot.chat(cmd2);
 
-    console.log(`[SETUP] 💨 Đào rỗng bên trong (${ix1},${iy1},${iz1}) đến (${ix2},${iy2},${iz2})...`);
-    bot.chat(`/fill ${ix1} ${iy1} ${iz1} ${ix2} ${iy2} ${iz2} minecraft:air`);
-
-    // TP bot vào giữa nhà tù
     setTimeout(() => {
       if (!bot) return;
-      console.log('[SETUP] 📍 Teleport bot vào giữa nhà tù...');
       bot.chat(`/tp ${CONFIG.username} ${cx} ${cy} ${cz}`);
-
       prisonBuilt = true;
       botStatus.position = `(${cx}, ${cy}, ${cz})`;
-
-      console.log('[SETUP] ✅ Nhà tù bedrock hoàn thành! Bot đã được giấu ở trên cao.');
-      console.log(`[SETUP] 📍 Vị trí: (${cx}, ${cy}, ${cz}) - Độ cao gần tối đa`);
-
-      // Bắt đầu anti-AFK
+      console.log(`[SETUP] ✅ Nhà tù bedrock hoàn thành tại (${cx}, ${cy}, ${cz})`);
       startAntiAfk();
     }, 1500);
   }, 1500);
 }
 
 // ============================================================
-//  CHỐNG AFK – hành vi giống người thật (Aternos kick sau 10 phút)
+//  ANTI-AFK NÂNG CAO – giống người thật
 // ============================================================
 let tick = 0;
 let chatTick = 0;
 
 function startAntiAfk() {
   stopAntiAfk();
-  console.log('[AFK] 🏃 Bắt đầu anti-AFK nâng cao (giống người thật)...');
+  console.log('[AFK] 🏃 Anti-AFK nâng cao đã bật');
 
   antiAfkTimer = setInterval(() => {
     if (!bot || !bot.entity) return;
@@ -260,116 +206,73 @@ function startAntiAfk() {
     chatTick++;
 
     try {
-      // Chọn ngẫu nhiên 2-3 hành động mỗi lần
-      const actions = shuffleArray([
-        doJump,
-        doWalk,
-        doSwingArm,
-        doSneak,
-        doLookAround,
-        doSprint,
-      ]);
+      // Chọn 2-3 hành động ngẫu nhiên mỗi lần
+      const pool = [doJump, doWalk, doSwingArm, doSneak, doLookAround, doSprint];
+      const shuffled = pool.sort(() => Math.random() - 0.5);
+      const count = 2 + Math.floor(Math.random() * 2);
 
-      // Thực hiện 2-3 hành động ngẫu nhiên
-      const numActions = 2 + Math.floor(Math.random() * 2);
-      for (let i = 0; i < numActions && i < actions.length; i++) {
+      for (let i = 0; i < count; i++) {
         setTimeout(() => {
-          if (bot) actions[i]();
-        }, i * (1000 + Math.random() * 1500)); // Delay ngẫu nhiên giữa các hành động
+          try { if (bot) shuffled[i](); } catch (_) {}
+        }, i * (800 + Math.random() * 1200));
       }
 
-      // Gửi chat message mỗi 5 phút (tránh bị coi là idle)
-      if (chatTick >= 37) { // ~5 phút (37 * 8s = 296s)
+      // Chat mỗi ~5 phút
+      if (chatTick >= 37) {
         chatTick = 0;
-        const msgs = ['.', '..', '...', 'hmm', 'ok', ':)', 'afk'];
-        bot.chat(msgs[Math.floor(Math.random() * msgs.length)]);
-        console.log('[AFK] 💬 Gửi chat message chống idle');
+        const msgs = ['.', '..', 'hmm', 'ok', ':)'];
+        try { bot.chat(msgs[Math.floor(Math.random() * msgs.length)]); } catch (_) {}
       }
 
-      // Log heartbeat
+      // Heartbeat log
       if (tick % 12 === 0 && bot.entity) {
-        const pos = bot.entity.position;
-        botStatus.position = `(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`;
-        console.log(`[AFK] 💓 Heartbeat #${tick} - vị trí ${botStatus.position} [trong nhà tù bedrock]`);
+        const p = bot.entity.position;
+        botStatus.position = `(${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`;
+        console.log(`[AFK] 💓 #${tick} - ${botStatus.position}`);
       }
     } catch (e) {
-      console.log('[AFK] Lỗi anti-afk:', e.message);
+      console.log('[AFK] Lỗi:', e.message);
     }
-  }, CONFIG.antiAfkInterval + Math.floor(Math.random() * 2000)); // Thêm jitter ngẫu nhiên
+  }, CONFIG.antiAfkInterval + Math.floor(Math.random() * 2000));
 }
 
-// === CÁC HÀNH ĐỘNG CHỐNG AFK ===
-
 function doJump() {
-  if (!bot) return;
   bot.setControlState('jump', true);
-  setTimeout(() => {
-    if (bot) bot.setControlState('jump', false);
-  }, 300 + Math.random() * 400);
+  setTimeout(() => { try { bot.setControlState('jump', false); } catch (_) {} }, 300 + Math.random() * 400);
 }
 
 function doWalk() {
-  if (!bot) return;
-  const directions = ['forward', 'back', 'left', 'right'];
-  const dir = directions[Math.floor(Math.random() * directions.length)];
-  bot.setControlState(dir, true);
-  setTimeout(() => {
-    if (bot) bot.setControlState(dir, false);
-  }, 500 + Math.random() * 1000);
+  const dirs = ['forward', 'back', 'left', 'right'];
+  const d = dirs[Math.floor(Math.random() * dirs.length)];
+  bot.setControlState(d, true);
+  setTimeout(() => { try { bot.setControlState(d, false); } catch (_) {} }, 500 + Math.random() * 1000);
 }
 
 function doSwingArm() {
-  if (!bot) return;
-  // Swing arm là tín hiệu anti-AFK hiệu quả nhất
   bot.swingArm('right');
-  setTimeout(() => {
-    if (bot) bot.swingArm('left');
-  }, 200 + Math.random() * 300);
+  setTimeout(() => { try { bot.swingArm('left'); } catch (_) {} }, 200 + Math.random() * 300);
 }
 
 function doSneak() {
-  if (!bot) return;
   bot.setControlState('sneak', true);
-  setTimeout(() => {
-    if (bot) bot.setControlState('sneak', false);
-  }, 800 + Math.random() * 1200);
+  setTimeout(() => { try { bot.setControlState('sneak', false); } catch (_) {} }, 800 + Math.random() * 1200);
 }
 
 function doLookAround() {
-  if (!bot) return;
   const yaw = (Math.random() * 2 * Math.PI) - Math.PI;
   const pitch = (Math.random() - 0.5) * Math.PI * 0.6;
   bot.look(yaw, pitch, false);
-  // Nhìn lại hướng khác sau 1 giây
-  setTimeout(() => {
-    if (bot) {
-      const yaw2 = (Math.random() * 2 * Math.PI) - Math.PI;
-      const pitch2 = (Math.random() - 0.5) * Math.PI * 0.3;
-      bot.look(yaw2, pitch2, false);
-    }
-  }, 800 + Math.random() * 700);
 }
 
 function doSprint() {
-  if (!bot) return;
   bot.setControlState('sprint', true);
   bot.setControlState('forward', true);
   setTimeout(() => {
-    if (bot) {
+    try {
       bot.setControlState('sprint', false);
       bot.setControlState('forward', false);
-    }
+    } catch (_) {}
   }, 400 + Math.random() * 600);
-}
-
-// === HELPER ===
-function shuffleArray(array) {
-  const arr = [...array];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
 }
 
 function stopAntiAfk() {
@@ -380,19 +283,14 @@ function stopAntiAfk() {
 }
 
 // ============================================================
-//  TỰ ĐỘNG RECONNECT
+//  RECONNECT
 // ============================================================
-let reconnectTimer = null;
-
 function scheduleReconnect() {
   if (reconnectTimer) return;
-
-  const delaySec = CONFIG.reconnectDelay / 1000;
-  console.log(`[BOT] 🔄 Sẽ kết nối lại sau ${delaySec} giây...`);
-
+  const sec = CONFIG.reconnectDelay / 1000;
+  console.log(`[BOT] 🔄 Reconnect sau ${sec}s...`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    console.log('[BOT] 🔄 Đang kết nối lại...');
     createBot();
   }, CONFIG.reconnectDelay);
 }
@@ -404,33 +302,31 @@ console.log('=========================================');
 console.log('  🤖 Minecraft AFK Bot – Aternos');
 console.log(`  Server: ${CONFIG.host}:${CONFIG.port}`);
 console.log(`  Bot:    ${CONFIG.username}`);
-console.log('  Edition: Java');
-console.log('  Mode:   Creative + Bedrock Prison');
+console.log('  Edition: Java | Mode: Creative Prison');
 console.log('=========================================');
 
 createBot();
 
-// Xử lý tắt an toàn
+// Tắt an toàn
 process.on('SIGINT', () => {
-  console.log('\n[BOT] Đang tắt bot...');
+  console.log('\n[BOT] Tắt bot...');
   stopAntiAfk();
-  try { if (bot) bot.end(); } catch (_) {}
+  destroyBot();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('\n[BOT] Nhận SIGTERM, đang tắt...');
+  console.log('\n[BOT] SIGTERM...');
   stopAntiAfk();
-  try { if (bot) bot.end(); } catch (_) {}
+  destroyBot();
   process.exit(0);
 });
 
-// Bắt lỗi không xử lý
 process.on('uncaughtException', (err) => {
-  console.log(`[BOT] ❌ Uncaught Exception: ${err.message}`);
+  console.log(`[BOT] ❌ Exception: ${err.message}`);
   botStatus.lastError = err.message;
 });
 
 process.on('unhandledRejection', (err) => {
-  console.log(`[BOT] ❌ Unhandled Rejection: ${err}`);
+  console.log(`[BOT] ❌ Rejection: ${err}`);
 });
