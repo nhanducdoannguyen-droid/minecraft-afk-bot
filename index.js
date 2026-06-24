@@ -65,7 +65,7 @@ function createBot() {
   if (bot) {
     try {
       bot.removeAllListeners();
-      bot.quit();
+      bot.end();
     } catch (_) {}
     bot = null;
   }
@@ -159,7 +159,7 @@ function cleanup() {
   if (bot) {
     try {
       bot.removeAllListeners();
-      bot.quit();
+      bot.end();
     } catch (_) {}
     bot = null;
   }
@@ -414,14 +414,14 @@ createBot();
 process.on('SIGINT', () => {
   console.log('\n[BOT] Đang tắt bot...');
   stopAntiAfk();
-  if (bot) bot.quit();
+  try { if (bot) bot.end(); } catch (_) {}
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('\n[BOT] Nhận SIGTERM, đang tắt...');
   stopAntiAfk();
-  if (bot) bot.quit();
+  try { if (bot) bot.end(); } catch (_) {}
   process.exit(0);
 });
 
