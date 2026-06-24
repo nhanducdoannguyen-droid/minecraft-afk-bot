@@ -68,92 +68,90 @@ function createBot() {
 
   console.log(`[BOT] Đang kết nối đến ${CONFIG.host}:${CONFIG.port} (Java Edition)...`);
 
-  try {
-    bot = mineflayer.createBot({
-      host: CONFIG.host,
-      port: CONFIG.port,
-      username: CONFIG.username,
-      auth: CONFIG.auth,
-      version: CONFIG.version,
-      hideErrors: false,
-      skipValidation: true,
-      checkTimeoutInterval: 60_000,
-      viewDistance: 'tiny', // Tải lượng chunk nhỏ nhất để tiết kiệm RAM & CPU trên Render
-      connect: (client) => {
-        // Tối ưu hóa bỏ qua SRV lookup DNS bằng cách phân giải trực tiếp A-record và kết nối socket thẳng
-        require('dns').lookup(CONFIG.host, (err, address) => {
-          if (err) {
-            client.emit('error', new Error(`DNS lookup failed: ${err.message}`));
-            return;
-          }
-          const socket = require('net').connect(CONFIG.port, address);
-          socket.once('error', (socketErr) => {
-            client.emit('error', socketErr);
-          });
-          client.setSocket(socket);
-          client.emit('connect');
-        });
-      }
+  // Phân giải IP trước để bỏ qua hoàn toàn SRV lookup gây chậm trễ
+  require('dns').lookup(CONFIG.host, (dnsErr, address) => {
+    if (dnsErr) {
+      console.log(`[DNS] ❌ Lỗi phân giải ${CONFIG.host}: ${dnsErr.message}`);
+      isConnecting = false;
+      botStatus.lastError = `DNS: ${dnsErr.message}`;
+      scheduleReconnect();
+      return;
+    }
+
+    console.log(`[DNS] 🔍 Phân giải thành công ${CONFIG.host} -> ${address}`);
+
+    try {
+      bot = mineflayer.createBot({
+        host: address, // Truyền IP trực tiếp
+        port: CONFIG.port,
+        username: CONFIG.username,
+        auth: CONFIG.auth,
+        version: CONFIG.version,
+        hideErrors: false,
+        skipValidation: true,
+        checkTimeoutInterval: 60_000,
+        viewDistance: 'tiny', // Tải lượng chunk nhỏ nhất để tiết kiệm RAM & CPU trên Render
+      });
+    } catch (err) {
+      console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
+      isConnecting = false;
+      botStatus.lastError = err.message;
+      scheduleReconnect();
+      return;
+    }
+
+    // --- Guard chống xử lý disconnect nhiều lần ---
+    let disconnected = false;
+    function onDisconnect(reason) {
+      if (disconnected) return;
+      disconnected = true;
+      console.log(`[BOT] 🔌 ${reason}`);
+      botStatus.online = false;
+      botStatus.lastError = reason;
+      isConnecting = false;
+      prisonBuilt = false;
+      destroyBot();
+      scheduleReconnect();
+    }
+
+    // Login thành công
+    bot.on('login', () => {
+      console.log('[BOT] ✅ Đã login!');
+      botStatus.online = true;
+      botStatus.lastLogin = new Date().toISOString();
+      isConnecting = false;
     });
-  } catch (err) {
-    console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
-    isConnecting = false;
-    botStatus.lastError = err.message;
-    scheduleReconnect();
-    return;
-  }
 
-  // --- Guard chống xử lý disconnect nhiều lần ---
-  let disconnected = false;
-  function onDisconnect(reason) {
-    if (disconnected) return;
-    disconnected = true;
-    console.log(`[BOT] 🔌 ${reason}`);
-    botStatus.online = false;
-    botStatus.lastError = reason;
-    isConnecting = false;
-    prisonBuilt = false;
-    destroyBot();
-    scheduleReconnect();
-  }
+    // Spawn vào thế giới
+    bot.once('spawn', () => {
+      console.log('[BOT] ✅ Đã spawn!');
+      if (!bot || !bot.entity) return;
+      const p = bot.entity.position;
+      console.log(`[BOT] 📍 Vị trí: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`);
+      setTimeout(() => setupCreativePrison(), 500);
+    });
 
-  // Login thành công
-  bot.on('login', () => {
-    console.log('[BOT] ✅ Đã login!');
-    botStatus.online = true;
-    botStatus.lastLogin = new Date().toISOString();
-    isConnecting = false;
-  });
+    // Chat
+    bot.on('chat', (username, message) => {
+      if (username === CONFIG.username) return;
+      console.log(`[CHAT] <${username}> ${message}`);
+    });
 
-  // Spawn vào thế giới
-  bot.once('spawn', () => {
-    console.log('[BOT] ✅ Đã spawn!');
-    if (!bot || !bot.entity) return;
-    const p = bot.entity.position;
-    console.log(`[BOT] 📍 Vị trí: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`);
-    setTimeout(() => setupCreativePrison(), 500); // Giảm từ 3000ms xuống 500ms
-  });
+    // Disconnect events
+    bot.on('kicked', (reason) => {
+      let text = reason;
+      try { text = JSON.parse(reason)?.text || reason; } catch (_) {}
+      onDisconnect(`Kicked: ${text}`);
+    });
 
-  // Chat
-  bot.on('chat', (username, message) => {
-    if (username === CONFIG.username) return;
-    console.log(`[CHAT] <${username}> ${message}`);
-  });
+    bot.on('error', (err) => {
+      console.log(`[BOT] ❌ Lỗi: ${err.message}`);
+      onDisconnect(`Error: ${err.message}`);
+    });
 
-  // Disconnect events
-  bot.on('kicked', (reason) => {
-    let text = reason;
-    try { text = JSON.parse(reason)?.text || reason; } catch (_) {}
-    onDisconnect(`Kicked: ${text}`);
-  });
-
-  bot.on('error', (err) => {
-    console.log(`[BOT] ❌ Lỗi: ${err.message}`);
-    onDisconnect(`Error: ${err.message}`);
-  });
-
-  bot.on('end', (reason) => {
-    onDisconnect(`End: ${reason || 'unknown'}`);
+    bot.on('end', (reason) => {
+      onDisconnect(`End: ${reason || 'unknown'}`);
+    });
   });
 }
 
