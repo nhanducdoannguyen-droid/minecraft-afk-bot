@@ -10,7 +10,7 @@ const CONFIG = {
   username: process.env.MC_USERNAME || 'BotTreoServer',
   auth: 'offline',                                  // Aternos dùng offline mode
   reconnectDelay: 30_000,                           // 30 giây giữa mỗi lần reconnect
-  antiAfkInterval: 15_000,                          // 15 giây chống AFK
+  antiAfkInterval: 8_000,                           // 8 giây chống AFK (Aternos kick sau 10 phút)
 };
 
 // ============================================================
@@ -223,50 +223,49 @@ function buildBedrockPrison(cx, cy, cz) {
 }
 
 // ============================================================
-//  CHỐNG AFK – di chuyển + nhảy trong nhà tù mỗi 15 giây
+//  CHỐNG AFK – hành vi giống người thật (Aternos kick sau 10 phút)
 // ============================================================
 let tick = 0;
+let chatTick = 0;
 
 function startAntiAfk() {
   stopAntiAfk();
-  console.log('[AFK] 🏃 Bắt đầu anti-AFK (nhảy + di chuyển trong nhà tù mỗi 15 giây)...');
-
-  const half = Math.floor(PRISON.innerSize / 2);
+  console.log('[AFK] 🏃 Bắt đầu anti-AFK nâng cao (giống người thật)...');
 
   antiAfkTimer = setInterval(() => {
     if (!bot || !bot.entity) return;
     tick++;
+    chatTick++;
 
     try {
-      // 1. Nhảy
-      bot.setControlState('jump', true);
-      setTimeout(() => {
-        if (bot) bot.setControlState('jump', false);
-      }, 500);
+      // Chọn ngẫu nhiên 2-3 hành động mỗi lần
+      const actions = shuffleArray([
+        doJump,
+        doWalk,
+        doSwingArm,
+        doSneak,
+        doLookAround,
+        doSprint,
+      ]);
 
-      // 2. Di chuyển ngẫu nhiên trong phạm vi nhà tù
-      const yaw = (Math.random() * 2 * Math.PI) - Math.PI;  // -π đến π
-      bot.look(yaw, 0, false);
+      // Thực hiện 2-3 hành động ngẫu nhiên
+      const numActions = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < numActions && i < actions.length; i++) {
+        setTimeout(() => {
+          if (bot) actions[i]();
+        }, i * (1000 + Math.random() * 1500)); // Delay ngẫu nhiên giữa các hành động
+      }
 
-      // 3. Đi bộ ngắn theo hướng ngẫu nhiên
-      const directions = ['forward', 'back', 'left', 'right'];
-      const dir = directions[Math.floor(Math.random() * directions.length)];
-      bot.setControlState(dir, true);
-      setTimeout(() => {
-        if (bot) bot.setControlState(dir, false);
-      }, 800);
-
-      // 4. Xoay đầu ngẫu nhiên (thêm 1 lớp chống AFK)
-      setTimeout(() => {
-        if (bot) {
-          const yaw2 = (Math.random() * 2 * Math.PI) - Math.PI;
-          const pitch = (Math.random() - 0.5) * Math.PI * 0.5;
-          bot.look(yaw2, pitch, false);
-        }
-      }, 1000);
+      // Gửi chat message mỗi 5 phút (tránh bị coi là idle)
+      if (chatTick >= 37) { // ~5 phút (37 * 8s = 296s)
+        chatTick = 0;
+        const msgs = ['.', '..', '...', 'hmm', 'ok', ':)', 'afk'];
+        bot.chat(msgs[Math.floor(Math.random() * msgs.length)]);
+        console.log('[AFK] 💬 Gửi chat message chống idle');
+      }
 
       // Log heartbeat
-      if (tick % 10 === 0 && bot.entity) {
+      if (tick % 12 === 0 && bot.entity) {
         const pos = bot.entity.position;
         botStatus.position = `(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`;
         console.log(`[AFK] 💓 Heartbeat #${tick} - vị trí ${botStatus.position} [trong nhà tù bedrock]`);
@@ -274,7 +273,81 @@ function startAntiAfk() {
     } catch (e) {
       console.log('[AFK] Lỗi anti-afk:', e.message);
     }
-  }, CONFIG.antiAfkInterval);
+  }, CONFIG.antiAfkInterval + Math.floor(Math.random() * 2000)); // Thêm jitter ngẫu nhiên
+}
+
+// === CÁC HÀNH ĐỘNG CHỐNG AFK ===
+
+function doJump() {
+  if (!bot) return;
+  bot.setControlState('jump', true);
+  setTimeout(() => {
+    if (bot) bot.setControlState('jump', false);
+  }, 300 + Math.random() * 400);
+}
+
+function doWalk() {
+  if (!bot) return;
+  const directions = ['forward', 'back', 'left', 'right'];
+  const dir = directions[Math.floor(Math.random() * directions.length)];
+  bot.setControlState(dir, true);
+  setTimeout(() => {
+    if (bot) bot.setControlState(dir, false);
+  }, 500 + Math.random() * 1000);
+}
+
+function doSwingArm() {
+  if (!bot) return;
+  // Swing arm là tín hiệu anti-AFK hiệu quả nhất
+  bot.swingArm('right');
+  setTimeout(() => {
+    if (bot) bot.swingArm('left');
+  }, 200 + Math.random() * 300);
+}
+
+function doSneak() {
+  if (!bot) return;
+  bot.setControlState('sneak', true);
+  setTimeout(() => {
+    if (bot) bot.setControlState('sneak', false);
+  }, 800 + Math.random() * 1200);
+}
+
+function doLookAround() {
+  if (!bot) return;
+  const yaw = (Math.random() * 2 * Math.PI) - Math.PI;
+  const pitch = (Math.random() - 0.5) * Math.PI * 0.6;
+  bot.look(yaw, pitch, false);
+  // Nhìn lại hướng khác sau 1 giây
+  setTimeout(() => {
+    if (bot) {
+      const yaw2 = (Math.random() * 2 * Math.PI) - Math.PI;
+      const pitch2 = (Math.random() - 0.5) * Math.PI * 0.3;
+      bot.look(yaw2, pitch2, false);
+    }
+  }, 800 + Math.random() * 700);
+}
+
+function doSprint() {
+  if (!bot) return;
+  bot.setControlState('sprint', true);
+  bot.setControlState('forward', true);
+  setTimeout(() => {
+    if (bot) {
+      bot.setControlState('sprint', false);
+      bot.setControlState('forward', false);
+    }
+  }, 400 + Math.random() * 600);
+}
+
+// === HELPER ===
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 function stopAntiAfk() {
