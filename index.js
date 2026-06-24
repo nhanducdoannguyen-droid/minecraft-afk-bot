@@ -79,6 +79,21 @@ function createBot() {
       skipValidation: true,
       checkTimeoutInterval: 60_000,
       viewDistance: 'tiny', // Tải lượng chunk nhỏ nhất để tiết kiệm RAM & CPU trên Render
+      connect: (client) => {
+        // Tối ưu hóa bỏ qua SRV lookup DNS bằng cách phân giải trực tiếp A-record và kết nối socket thẳng
+        require('dns').lookup(CONFIG.host, (err, address) => {
+          if (err) {
+            client.emit('error', new Error(`DNS lookup failed: ${err.message}`));
+            return;
+          }
+          const socket = require('net').connect(CONFIG.port, address);
+          socket.once('error', (socketErr) => {
+            client.emit('error', socketErr);
+          });
+          client.setSocket(socket);
+          client.emit('connect');
+        });
+      }
     });
   } catch (err) {
     console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
