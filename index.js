@@ -91,7 +91,7 @@ function createBot() {
         skipValidation: true,
         checkTimeoutInterval: 60_000,
         viewDistance: 'tiny', // Tải lượng chunk nhỏ nhất để tiết kiệm RAM & CPU trên Render
-        physicsEnabled: false, // Tắt hoàn toàn engine vật lý để tiết kiệm tối đa CPU & RAM trên Render
+        physicsEnabled: true, // Bật vật lý để gửi gói tin vị trí chuẩn xác, tránh bị kick chống hack
       });
     } catch (err) {
       console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
@@ -140,8 +140,12 @@ function createBot() {
 
     // Disconnect events
     bot.on('kicked', (reason) => {
-      let text = reason;
-      try { text = JSON.parse(reason)?.text || reason; } catch (_) {}
+      let text = typeof reason === 'string' ? reason : JSON.stringify(reason);
+      try {
+        const parsed = JSON.parse(reason);
+        if (parsed.text) text = parsed.text;
+        else if (parsed.extra) text = parsed.extra.map(e => e.text).join('');
+      } catch (_) {}
       onDisconnect(`Kicked: ${text}`);
     });
 
@@ -184,27 +188,19 @@ function buildPrison(cx, cy, cz) {
   const h = Math.floor(PRISON.innerSize / 2);
   const height = PRISON.innerSize;
 
-  // Fill bedrock đặc
-  const cmd1 = `/fill ${cx-h-1} ${cy-1} ${cz-h-1} ${cx+h+1} ${cy+height} ${cz+h+1} minecraft:bedrock`;
-  console.log(`[SETUP] 🧱 ${cmd1}`);
-  bot.chat(cmd1);
+  // Xây nhà tù bedrock rỗng bằng lệnh /fill hollow duy nhất để tránh bị kẹt ngạt thở/kích chống hack
+  const cmd = `/fill ${cx-h-1} ${cy-1} ${cz-h-1} ${cx+h+1} ${cy+height} ${cz+h+1} minecraft:bedrock hollow`;
+  console.log(`[SETUP] 🧱 ${cmd}`);
+  bot.chat(cmd);
 
   setTimeout(() => {
     if (!bot) return;
-    // Đào rỗng bên trong
-    const cmd2 = `/fill ${cx-h} ${cy} ${cz-h} ${cx+h} ${cy+height-1} ${cz+h} minecraft:air`;
-    console.log(`[SETUP] 💨 ${cmd2}`);
-    bot.chat(cmd2);
-
-    setTimeout(() => {
-      if (!bot) return;
-      bot.chat(`/tp ${CONFIG.username} ${cx} ${cy} ${cz}`);
-      prisonBuilt = true;
-      botStatus.position = `(${cx}, ${cy}, ${cz})`;
-      console.log(`[SETUP] ✅ Nhà tù bedrock hoàn thành tại (${cx}, ${cy}, ${cz})`);
-      startAntiAfk();
-    }, 400); // Giảm từ 1500ms xuống 400ms
-  }, 400); // Giảm từ 1500ms xuống 400ms
+    bot.chat(`/tp ${CONFIG.username} ${cx} ${cy} ${cz}`);
+    prisonBuilt = true;
+    botStatus.position = `(${cx}, ${cy}, ${cz})`;
+    console.log(`[SETUP] ✅ Nhà tù bedrock hoàn thành tại (${cx}, ${cy}, ${cz})`);
+    startAntiAfk();
+  }, 500);
 }
 
 // ============================================================
