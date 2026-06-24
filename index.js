@@ -61,6 +61,16 @@ function createBot() {
   if (isConnecting) return;
   isConnecting = true;
 
+  // Dọn sạch bot cũ nếu còn tồn tại
+  if (bot) {
+    try {
+      bot.removeAllListeners();
+      bot.quit();
+    } catch (_) {}
+    bot = null;
+  }
+  stopAntiAfk();
+
   console.log(`[BOT] Đang kết nối đến ${CONFIG.host}:${CONFIG.port} (Java Edition)...`);
 
   try {
@@ -90,6 +100,7 @@ function createBot() {
   // === Sự kiện: Spawn – Chuyển Creative, TP lên cao, xây nhà tù ===
   bot.once('spawn', () => {
     console.log('[BOT] ✅ Đã spawn vào thế giới!');
+    if (!bot || !bot.entity) return;
     const pos = bot.entity.position;
     console.log(`[BOT] 📍 Vị trí spawn: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
 
@@ -105,42 +116,51 @@ function createBot() {
     console.log(`[CHAT] <${username}> ${message}`);
   });
 
+  // === Guard chống gọi reconnect nhiều lần ===
+  let hasDisconnected = false;
+
+  function handleDisconnect(reason) {
+    if (hasDisconnected) return; // Đã xử lý rồi, bỏ qua
+    hasDisconnected = true;
+    console.log(`[BOT] 🔌 Ngắt kết nối: ${reason}`);
+    botStatus.online = false;
+    botStatus.lastError = reason;
+    prisonBuilt = false;
+    cleanup();
+    scheduleReconnect();
+  }
+
   // === Sự kiện: Bị kick ===
   bot.on('kicked', (reason) => {
     let reasonText = reason;
     try { reasonText = JSON.parse(reason)?.text || reason; } catch (_) {}
-    console.log(`[BOT] ⚠️  Bị kick: ${reasonText}`);
-    botStatus.online = false;
-    botStatus.lastError = `Kicked: ${reasonText}`;
-    prisonBuilt = false;
-    cleanup();
-    scheduleReconnect();
+    handleDisconnect(`Kicked: ${reasonText}`);
   });
 
   // === Sự kiện: Lỗi ===
   bot.on('error', (err) => {
     console.log(`[BOT] ❌ Lỗi: ${err.message}`);
-    botStatus.lastError = err.message;
-    botStatus.online = false;
-    prisonBuilt = false;
-    cleanup();
-    scheduleReconnect();
+    handleDisconnect(`Error: ${err.message}`);
   });
 
   // === Sự kiện: Mất kết nối ===
   bot.on('end', (reason) => {
-    console.log(`[BOT] 🔌 Mất kết nối: ${reason || 'unknown'}`);
-    botStatus.online = false;
-    prisonBuilt = false;
-    cleanup();
-    scheduleReconnect();
+    handleDisconnect(`Disconnected: ${reason || 'unknown'}`);
   });
 }
 
 function cleanup() {
   isConnecting = false;
   stopAntiAfk();
-  bot = null;
+
+  // Đóng bot cũ đúng cách
+  if (bot) {
+    try {
+      bot.removeAllListeners();
+      bot.quit();
+    } catch (_) {}
+    bot = null;
+  }
 }
 
 // ============================================================
