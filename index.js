@@ -78,6 +78,7 @@ function createBot() {
       hideErrors: false,
       skipValidation: true,
       checkTimeoutInterval: 60_000,
+      viewDistance: 'tiny', // Tải lượng chunk nhỏ nhất để tiết kiệm RAM & CPU trên Render
     });
   } catch (err) {
     console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
