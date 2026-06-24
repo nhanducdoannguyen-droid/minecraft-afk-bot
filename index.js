@@ -8,6 +8,7 @@ const CONFIG = {
   host: process.env.MC_HOST || 'nhancu1234.aternos.me',
   port: parseInt(process.env.MC_PORT, 10) || 44076,
   username: process.env.MC_USERNAME || 'BotTreoServer',
+  version: process.env.MC_VERSION || '1.21.1', // Thiết lập phiên bản Minecraft cụ thể để tránh ping tự động dò tìm gây ETIMEDOUT
   auth: 'offline',
   reconnectDelay: 30_000,
   antiAfkInterval: 8_000,
@@ -73,6 +74,7 @@ function createBot() {
       port: CONFIG.port,
       username: CONFIG.username,
       auth: CONFIG.auth,
+      version: CONFIG.version,
       hideErrors: false,
       skipValidation: true,
       checkTimeoutInterval: 60_000,
@@ -300,8 +302,9 @@ function scheduleReconnect() {
 // ============================================================
 console.log('=========================================');
 console.log('  🤖 Minecraft AFK Bot – Aternos');
-console.log(`  Server: ${CONFIG.host}:${CONFIG.port}`);
-console.log(`  Bot:    ${CONFIG.username}`);
+console.log(`  Server:  ${CONFIG.host}:${CONFIG.port}`);
+console.log(`  Bot:     ${CONFIG.username}`);
+console.log(`  Version: ${CONFIG.version}`);
 console.log('  Edition: Java | Mode: Creative Prison');
 console.log('=========================================');
 
