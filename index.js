@@ -80,6 +80,8 @@ function createBot() {
       username: CONFIG.username,
       auth: CONFIG.auth,
       hideErrors: false,
+      skipValidation: true,
+      checkTimeoutInterval: 60000,   // 60s timeout thay vì mặc định 10s
     });
   } catch (err) {
     console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
