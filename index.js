@@ -1,4 +1,4 @@
-const mineflayer = require('mineflayer');
+const bedrock = require('bedrock-protocol');
 const express = require('express');
 
 // ============================================================
@@ -8,9 +8,9 @@ const CONFIG = {
   host: process.env.MC_HOST || 'nhancu1234.aternos.me',
   port: parseInt(process.env.MC_PORT, 10) || 44076,
   username: process.env.MC_USERNAME || 'BotTreoServer',
-  version: process.env.MC_VERSION || false,      // tự detect phiên bản
+  offline: true,                                  // Aternos dùng offline mode
   reconnectDelay: 30_000,                         // 30 giây giữa mỗi lần reconnect
-  antiAfkInterval: 15_000,                        // 15 giây nhảy 1 lần chống AFK
+  antiAfkInterval: 15_000,                        // 15 giây chống AFK
 };
 
 // ============================================================
@@ -41,94 +41,150 @@ app.listen(PORT, () => {
 // ============================================================
 //  TẠO & QUẢN LÝ BOT
 // ============================================================
-let bot = null;
+let client = null;
 let antiAfkTimer = null;
+let isConnecting = false;
 
 function createBot() {
-  console.log(`[BOT] Đang kết nối đến ${CONFIG.host}:${CONFIG.port} ...`);
+  if (isConnecting) return;
+  isConnecting = true;
 
-  bot = mineflayer.createBot({
-    host: CONFIG.host,
-    port: CONFIG.port,
-    username: CONFIG.username,
-    version: CONFIG.version || undefined,
-    auth: 'offline',                // Aternos thường dùng offline mode
-    hideErrors: false,
-  });
+  console.log(`[BOT] Đang kết nối đến ${CONFIG.host}:${CONFIG.port} (Bedrock Edition)...`);
 
-  // === Sự kiện: Đăng nhập thành công ===
-  bot.on('login', () => {
-    console.log(`[BOT] ✅ Đã đăng nhập thành công với tên "${bot.username}"`);
+  try {
+    client = bedrock.createClient({
+      host: CONFIG.host,
+      port: CONFIG.port,
+      username: CONFIG.username,
+      offline: CONFIG.offline,
+      skipPing: true,
+    });
+  } catch (err) {
+    console.log(`[BOT] ❌ Lỗi tạo client: ${err.message}`);
+    isConnecting = false;
+    botStatus.lastError = err.message;
+    scheduleReconnect();
+    return;
+  }
+
+  // === Sự kiện: Kết nối thành công (nhận gói start_game) ===
+  client.on('start_game', (packet) => {
+    console.log(`[BOT] ✅ Đã vào server thành công!`);
+    console.log(`[BOT] 🌍 World: ${packet.world_name || 'unknown'}`);
+    console.log(`[BOT] 🎮 GameMode: ${packet.player_gamemode}`);
     botStatus.online = true;
     botStatus.lastLogin = new Date().toISOString();
-  });
-
-  bot.on('spawn', () => {
-    console.log('[BOT] ✅ Đã spawn vào thế giới!');
+    isConnecting = false;
     startAntiAfk();
   });
 
-  // === Sự kiện: Chat ===
-  bot.on('chat', (username, message) => {
-    if (username === bot.username) return;
-    console.log(`[CHAT] <${username}> ${message}`);
+  // === Sự kiện: Nhận tin nhắn chat ===
+  client.on('text', (packet) => {
+    if (packet.source_name === CONFIG.username) return;
+    console.log(`[CHAT] <${packet.source_name || 'Server'}> ${packet.message}`);
   });
 
   // === Sự kiện: Bị kick ===
-  bot.on('kicked', (reason) => {
+  client.on('disconnect', (packet) => {
+    const reason = packet.message || packet.disconnect_reason || 'Unknown';
     console.log(`[BOT] ⚠️  Bị kick: ${reason}`);
     botStatus.online = false;
     botStatus.lastError = `Kicked: ${reason}`;
+    isConnecting = false;
     stopAntiAfk();
     scheduleReconnect();
   });
 
   // === Sự kiện: Lỗi ===
-  bot.on('error', (err) => {
+  client.on('error', (err) => {
     console.log(`[BOT] ❌ Lỗi: ${err.message}`);
     botStatus.lastError = err.message;
-  });
-
-  // === Sự kiện: Mất kết nối ===
-  bot.on('end', (reason) => {
-    console.log(`[BOT] 🔌 Mất kết nối: ${reason || 'unknown'}`);
     botStatus.online = false;
-    botStatus.lastError = `Disconnected: ${reason || 'unknown'}`;
+    isConnecting = false;
     stopAntiAfk();
     scheduleReconnect();
+  });
+
+  // === Sự kiện: Đóng kết nối ===
+  client.on('close', () => {
+    console.log(`[BOT] 🔌 Mất kết nối`);
+    botStatus.online = false;
+    isConnecting = false;
+    stopAntiAfk();
+    scheduleReconnect();
+  });
+
+  // === Sự kiện: Spawn ===
+  client.on('spawn', () => {
+    console.log('[BOT] ✅ Đã spawn vào thế giới!');
   });
 }
 
 // ============================================================
-//  CHỐNG AFK – nhảy & xoay đầu mỗi 15 giây
+//  CHỐNG AFK – gửi packet di chuyển mỗi 15 giây
 // ============================================================
+let posX = 0, posY = 64, posZ = 0;
+let tick = 0;
+
 function startAntiAfk() {
   stopAntiAfk();
   console.log('[AFK] Bắt đầu anti-AFK...');
 
+  // Lắng nghe vị trí ban đầu
+  if (client) {
+    client.on('move_player', (packet) => {
+      if (packet.runtime_id) {
+        posX = packet.position?.x || posX;
+        posY = packet.position?.y || posY;
+        posZ = packet.position?.z || posZ;
+      }
+    });
+  }
+
   antiAfkTimer = setInterval(() => {
-    if (!bot || !bot.entity) return;
+    if (!client) return;
+    tick++;
 
     try {
-      // Nhảy
-      bot.setControlState('jump', true);
-      setTimeout(() => {
-        if (bot) bot.setControlState('jump', false);
-      }, 500);
+      // Gửi packet di chuyển (xoay đầu ngẫu nhiên)
+      const yaw = Math.random() * 360;
+      const pitch = (Math.random() - 0.5) * 60;
 
-      // Xoay ngẫu nhiên
-      const yaw = Math.random() * Math.PI * 2;
-      const pitch = (Math.random() - 0.5) * Math.PI;
-      bot.look(yaw, pitch, false);
+      // Di chuyển nhẹ ngẫu nhiên
+      const dx = (Math.random() - 0.5) * 0.5;
+      const dz = (Math.random() - 0.5) * 0.5;
 
-      // Đôi khi đi vòng tròn nhỏ
-      if (Math.random() > 0.7) {
-        const directions = ['forward', 'back', 'left', 'right'];
-        const dir = directions[Math.floor(Math.random() * directions.length)];
-        bot.setControlState(dir, true);
-        setTimeout(() => {
-          if (bot) bot.setControlState(dir, false);
-        }, 1000);
+      client.queue('move_player', {
+        runtime_id: 1n,
+        position: {
+          x: posX + dx,
+          y: posY,
+          z: posZ + dz,
+        },
+        rotation: {
+          x: pitch,
+          y: yaw,
+          z: yaw,
+        },
+        mode: 1,
+        on_ground: true,
+        riding_eid: 0n,
+        tick: BigInt(tick),
+      });
+
+      // Nhảy mỗi 3 lần
+      if (tick % 3 === 0) {
+        client.queue('player_action', {
+          runtime_id: 1n,
+          action: 'jump',
+          position: { x: Math.floor(posX), y: Math.floor(posY), z: Math.floor(posZ) },
+          result_position: { x: 0, y: 0, z: 0 },
+          face: 0,
+        });
+      }
+
+      if (tick % 10 === 0) {
+        console.log(`[AFK] Heartbeat #${tick} - vị trí (${posX.toFixed(1)}, ${posY.toFixed(1)}, ${posZ.toFixed(1)})`);
       }
     } catch (e) {
       console.log('[AFK] Lỗi anti-afk:', e.message);
@@ -146,11 +202,16 @@ function stopAntiAfk() {
 // ============================================================
 //  TỰ ĐỘNG RECONNECT
 // ============================================================
+let reconnectTimer = null;
+
 function scheduleReconnect() {
+  if (reconnectTimer) return; // Đã có timer rồi
+
   const delaySec = CONFIG.reconnectDelay / 1000;
   console.log(`[BOT] 🔄 Sẽ kết nối lại sau ${delaySec} giây...`);
 
-  setTimeout(() => {
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
     console.log('[BOT] 🔄 Đang kết nối lại...');
     createBot();
   }, CONFIG.reconnectDelay);
@@ -163,6 +224,7 @@ console.log('=========================================');
 console.log('  🤖 Minecraft AFK Bot – Aternos');
 console.log(`  Server: ${CONFIG.host}:${CONFIG.port}`);
 console.log(`  Bot:    ${CONFIG.username}`);
+console.log('  Edition: Bedrock');
 console.log('=========================================');
 
 createBot();
@@ -171,13 +233,23 @@ createBot();
 process.on('SIGINT', () => {
   console.log('\n[BOT] Đang tắt bot...');
   stopAntiAfk();
-  if (bot) bot.quit();
+  if (client) client.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('\n[BOT] Nhận SIGTERM, đang tắt...');
   stopAntiAfk();
-  if (bot) bot.quit();
+  if (client) client.close();
   process.exit(0);
+});
+
+// Bắt lỗi không xử lý
+process.on('uncaughtException', (err) => {
+  console.log(`[BOT] ❌ Uncaught Exception: ${err.message}`);
+  botStatus.lastError = err.message;
+});
+
+process.on('unhandledRejection', (err) => {
+  console.log(`[BOT] ❌ Unhandled Rejection: ${err}`);
 });
