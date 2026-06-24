@@ -116,7 +116,7 @@ function createBot() {
     if (!bot || !bot.entity) return;
     const p = bot.entity.position;
     console.log(`[BOT] 📍 Vị trí: (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`);
-    setTimeout(() => setupCreativePrison(), 3000);
+    setTimeout(() => setupCreativePrison(), 500); // Giảm từ 3000ms xuống 500ms
   });
 
   // Chat
@@ -161,8 +161,8 @@ function setupCreativePrison() {
     console.log(`[SETUP] 🚀 TP lên Y=${PRISON.centerY}`);
     bot.chat(`/tp ${CONFIG.username} ${cx} ${PRISON.centerY} ${cz}`);
 
-    setTimeout(() => buildPrison(cx, PRISON.centerY, cz), 2000);
-  }, 2000);
+    setTimeout(() => buildPrison(cx, PRISON.centerY, cz), 400); // Giảm từ 2000ms xuống 400ms
+  }, 400); // Giảm từ 2000ms xuống 400ms
 }
 
 function buildPrison(cx, cy, cz) {
@@ -189,8 +189,8 @@ function buildPrison(cx, cy, cz) {
       botStatus.position = `(${cx}, ${cy}, ${cz})`;
       console.log(`[SETUP] ✅ Nhà tù bedrock hoàn thành tại (${cx}, ${cy}, ${cz})`);
       startAntiAfk();
-    }, 1500);
-  }, 1500);
+    }, 400); // Giảm từ 1500ms xuống 400ms
+  }, 400); // Giảm từ 1500ms xuống 400ms
 }
 
 // ============================================================
