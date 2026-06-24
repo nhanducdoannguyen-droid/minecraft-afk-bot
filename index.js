@@ -91,6 +91,7 @@ function createBot() {
         skipValidation: true,
         checkTimeoutInterval: 60_000,
         viewDistance: 'tiny', // Tải lượng chunk nhỏ nhất để tiết kiệm RAM & CPU trên Render
+        physicsEnabled: false, // Tắt hoàn toàn engine vật lý để tiết kiệm tối đa CPU & RAM trên Render
       });
     } catch (err) {
       console.log(`[BOT] ❌ Lỗi tạo bot: ${err.message}`);
@@ -222,15 +223,11 @@ function startAntiAfk() {
     chatTick++;
 
     try {
-      // Chọn 2-3 hành động ngẫu nhiên mỗi lần
-      const pool = [doJump, doWalk, doSwingArm, doSneak, doLookAround, doSprint];
-      const shuffled = pool.sort(() => Math.random() - 0.5);
-      const count = 2 + Math.floor(Math.random() * 2);
-
-      for (let i = 0; i < count; i++) {
-        setTimeout(() => {
-          try { if (bot) shuffled[i](); } catch (_) {}
-        }, i * (800 + Math.random() * 1200));
+      // Thực hiện ngẫu nhiên vung tay hoặc xoay đầu (bỏ di chuyển vật lý giúp tiết kiệm tối đa CPU)
+      if (Math.random() < 0.5) {
+        doSwingArm();
+      } else {
+        doLookAround();
       }
 
       // Chat mỗi ~5 phút
@@ -252,43 +249,19 @@ function startAntiAfk() {
   }, CONFIG.antiAfkInterval + Math.floor(Math.random() * 2000));
 }
 
-function doJump() {
-  bot.setControlState('jump', true);
-  setTimeout(() => { try { bot.setControlState('jump', false); } catch (_) {} }, 300 + Math.random() * 400);
-}
-
-function doWalk() {
-  const dirs = ['forward', 'back', 'left', 'right'];
-  const d = dirs[Math.floor(Math.random() * dirs.length)];
-  bot.setControlState(d, true);
-  setTimeout(() => { try { bot.setControlState(d, false); } catch (_) {} }, 500 + Math.random() * 1000);
-}
-
 function doSwingArm() {
-  bot.swingArm('right');
-  setTimeout(() => { try { bot.swingArm('left'); } catch (_) {} }, 200 + Math.random() * 300);
-}
-
-function doSneak() {
-  bot.setControlState('sneak', true);
-  setTimeout(() => { try { bot.setControlState('sneak', false); } catch (_) {} }, 800 + Math.random() * 1200);
+  try {
+    bot.swingArm('right');
+    setTimeout(() => { try { if (bot) bot.swingArm('left'); } catch (_) {} }, 200 + Math.random() * 300);
+  } catch (_) {}
 }
 
 function doLookAround() {
-  const yaw = (Math.random() * 2 * Math.PI) - Math.PI;
-  const pitch = (Math.random() - 0.5) * Math.PI * 0.6;
-  bot.look(yaw, pitch, false);
-}
-
-function doSprint() {
-  bot.setControlState('sprint', true);
-  bot.setControlState('forward', true);
-  setTimeout(() => {
-    try {
-      bot.setControlState('sprint', false);
-      bot.setControlState('forward', false);
-    } catch (_) {}
-  }, 400 + Math.random() * 600);
+  try {
+    const yaw = (Math.random() * 2 * Math.PI) - Math.PI;
+    const pitch = (Math.random() - 0.5) * Math.PI * 0.6;
+    bot.look(yaw, pitch, false);
+  } catch (_) {}
 }
 
 function stopAntiAfk() {
