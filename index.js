@@ -8,7 +8,7 @@ const CONFIG = {
   host: process.env.MC_HOST || 'nhancu1234.aternos.me',
   port: parseInt(process.env.MC_PORT, 10) || 44076,
   username: process.env.MC_USERNAME || 'BotTreoServer',
-  version: process.env.MC_VERSION || '1.21.1', // Thiết lập phiên bản Minecraft cụ thể để tránh ping tự động dò tìm gây ETIMEDOUT
+  version: process.env.MC_VERSION || '1.21.11', // Thiết lập phiên bản Minecraft cụ thể để tránh ping tự động dò tìm gây ETIMEDOUT
   auth: 'offline',
   reconnectDelay: 30_000,
   antiAfkInterval: 8_000,
